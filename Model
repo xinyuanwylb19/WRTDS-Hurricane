@@ -1,0 +1,295 @@
+# WRTDS-Hurricane
+# Xinyuan Wei
+# 10/09/2020
+
+import os
+import math
+import random
+import pandas as pd
+import pathlib
+from pandas import DataFrame
+from sklearn import linear_model
+
+watershed_list=['Anasco','Fajardo','Hormigueros','Patillas',
+                'Ponce','Rio_Grande','Utuado']
+
+# Watershed name.
+watershed_order=6
+
+# Peak value.
+PNL=['0.065799863','0.188444578','0.050955414','0.497611465',
+     '0.124402866','1.273885354','0.079617834']
+PPL=['7.221572281','16.24853763','12.44028662','9.829362271',
+     '11.01976947','22.11606511','22.11606511']
+PN=float(PNL[watershed_order])
+PP=float(PPL[watershed_order])
+
+
+# Peak time (days).
+LNL=['200','280','285','300','230','180','260']
+LPL=['210','210','160','240','310','340','190']
+LN=float(LNL[watershed_order])
+LP=float(LPL[watershed_order])
+
+# Diminishing marginal effect.
+dmeL=['10000','2000','1000','2000','1000','1000','1000']
+dme=float(dmeL[watershed_order])
+
+# Shape parameter.
+SN=1/LN*40
+SP=1/LP*40
+
+watershed_name=watershed_list[watershed_order]
+file_result='2.Model_Estimates'
+print(watershed_name)
+
+'''
+Discharge:  feet3/s  L/s
+Nitrogen:   mg/L     kg/day
+Phosphorus: mg/L     kg/day
+
+feet3 - L  28.3168
+'''
+
+# Read the data and set the path.
+cwd=os.getcwd()
+parent_path=pathlib.Path(cwd).parent
+data_dir=str(parent_path)+chr(92)+'1.USGS_Data'+chr(92)
+NP_file=data_dir+watershed_name+'.csv'
+DISC_file=data_dir+watershed_name+'_Dis.csv'
+
+NP_data=pd.read_csv(NP_file, sep=',')
+DISC_data=pd.read_csv(DISC_file, sep=',')
+
+#print(NP_data)
+#print(DISC_data)
+
+NP_records=len(NP_data)
+#print('The total Nitrogen and Pphosphorus records is '+str(NP_records)+'.')
+
+Results_arr=[]
+
+# Match N, P fluxes and discharge.
+for i in range (NP_records):
+    temp=[]
+    
+    m_N=NP_data['p00600'].at[i]
+    m_P=NP_data['p00665'].at[i]
+    
+    date=NP_data['sample_dt'].at[i]
+    DISC=DISC_data.loc[DISC_data['datetime']==date]
+    m_DISC=DISC['Discharge'].tolist()[0]
+    m_TSLH=DISC['TSLH'].tolist()[0]
+    
+    temp.append(date)
+    temp.append(m_DISC)
+    temp.append(m_TSLH)
+    temp.append(m_N)
+    temp.append(m_P)
+    
+    Results_arr.append(temp)
+
+#print(Results_arr)    
+temp_data=DataFrame(Results_arr,columns=['Date','Discharge','TSLH',
+                                         'Nitrogen','Phosphorus'])
+
+match_name='Match_'+watershed_list[watershed_order]+'.csv'
+temp_data.to_csv(match_name)
+
+# Add year, month, data
+temp_data['Date']=pd.to_datetime(temp_data['Date'])
+temp_data['Year']=temp_data['Date'].dt.year
+temp_data['Month']=temp_data['Date'].dt.month
+temp_data['Day']=temp_data['Date'].dt.day
+
+model_arr=[]
+for i in range (NP_records):
+    temp=[]
+    LNN=math.log(temp_data['Nitrogen'].at[i])
+    LNP=math.log(temp_data['Phosphorus'].at[i])
+    LNDIS=math.log(temp_data['Discharge'].at[i])
+    TSLH=temp_data['TSLH'].at[i]
+    HEN=math.exp(-math.pow(SN*(m_TSLH-LN),2)/2)/math.sqrt(PN*math.pi)
+    HEP=math.exp(-math.pow(SP*(m_TSLH-LP),2)/2)/math.sqrt(PP*math.pi)
+    SINM=math.sin(temp_data['Month'].at[i])
+    COSD=math.cos(temp_data['Day'].at[i])  
+    
+    temp.append(temp_data['Date'].at[i])
+    temp.append(temp_data['Year'].at[i])
+    temp.append(temp_data['Month'].at[i])
+    temp.append(temp_data['Day'].at[i])
+    temp.append(temp_data['Discharge'].at[i])
+    temp.append(temp_data['TSLH'].at[i])
+    temp.append(temp_data['Nitrogen'].at[i])
+    temp.append(temp_data['Phosphorus'].at[i])
+    temp.append(LNN)
+    temp.append(LNP)
+    temp.append(LNDIS)
+    temp.append(SINM)
+    temp.append(COSD)
+    temp.append(HEN)
+    temp.append(HEP)
+    
+    model_arr.append(temp)
+    
+model_data=DataFrame(model_arr,columns=['Date','Year','Month','Day',
+                                        'Discharge','TSLH','Nitrogen',
+                                        'Phosphorus','LNN','LNP','LNDIS',
+                                        'SINM','COSD','HEN','HEP'])
+
+N_data=model_data.copy()
+P_data=model_data.copy()
+
+nan_value=float('NaN')
+N_data.replace('',nan_value,inplace=True)
+N_data.dropna(subset=['LNN'],inplace=True)
+
+nan_value=float('NaN')
+P_data.replace('',nan_value,inplace=True)
+P_data.dropna(subset=['LNP'],inplace=True)
+
+#print(N_data)
+#print(P_data)
+
+'''
+import matplotlib.pyplot as plt
+plt.scatter(N_data['LNN'],N_data['LNDIS'], color='green')
+plt.scatter(N_data['LNN'],N_data['SINM'], color='blue')
+plt.scatter(N_data['LNN'],N_data['COSD'], color='black')
+'''
+
+# Function to estimate coefficients.
+def coef_E(data_arr, flux):
+    coefs=[]
+    if flux=='N':
+        var='LNN'
+        HE='HEN'
+    if flux=='P':
+        var='LNP'
+        HE='HEP'
+    
+    randomlist=random.sample(range(len(data_arr)-1),20)
+    #print(randomlist)
+    
+    temp_copy=data_arr.copy()
+    model_temp=temp_copy.drop(temp_copy.index[randomlist])
+    #print(len(model_temp))
+    
+    X=model_temp[['LNDIS','Year','SINM','COSD',HE]]
+    Y=model_temp[var]
+    
+    regr=linear_model.LinearRegression()
+    regr.fit(X,Y)
+    
+    #print('Intercept:',regr.intercept_)
+    #print('Coefficients:',regr.coef_)
+    
+    coefs.append(regr.coef_[0])
+    coefs.append(regr.coef_[1])
+    coefs.append(regr.coef_[2])
+    coefs.append(regr.coef_[3])
+    coefs.append(regr.coef_[4])
+    coefs.append(regr.intercept_)
+    return(coefs)
+
+# Estimate coefficients and intercept.
+  
+# Coefficients for Nitrogen.
+N_coefs_arr=[]
+for i in range (100):
+    temp_coefsN=[]
+    temp_coefs=coef_E(N_data,'N')
+    temp_coefsN.append(temp_coefs[0])
+    temp_coefsN.append(temp_coefs[1])
+    temp_coefsN.append(temp_coefs[2])
+    temp_coefsN.append(temp_coefs[3])
+    temp_coefsN.append(temp_coefs[4])
+    temp_coefsN.append(temp_coefs[5])
+    
+    N_coefs_arr.append(temp_coefsN)
+    
+N_coefs=DataFrame(N_coefs_arr,columns=['NCDC','NCYR','NCMN','NCDY','NHE','NINC'])    
+ 
+NCDC=round(N_coefs['NCDC'].mean(),4)
+NCYR=round(N_coefs['NCYR'].mean(),4)
+NCMN=round(N_coefs['NCMN'].mean(),4)
+NCDY=round(N_coefs['NCDY'].mean(),4)
+NHE=round(N_coefs['NHE'].mean(),4)
+NINC=round(N_coefs['NINC'].mean(),4)
+#print(NCDC,NCYR,NCMN,NCDY,NHE,NINC)
+
+# Coefficients for Phosphorus.
+P_coefs_arr=[]
+for i in range (100):
+    temp_coefsP=[]
+    temp_coefs=coef_E(P_data,'P')
+    temp_coefsP.append(temp_coefs[0])
+    temp_coefsP.append(temp_coefs[1])
+    temp_coefsP.append(temp_coefs[2])
+    temp_coefsP.append(temp_coefs[3])
+    temp_coefsP.append(temp_coefs[4])
+    temp_coefsP.append(temp_coefs[5])
+    
+    P_coefs_arr.append(temp_coefsP)
+    
+P_coefs=DataFrame(P_coefs_arr,columns=['PCDC','PCYR','PCMN','PCDY','PHE','PINC'])    
+ 
+PCDC=round(P_coefs['PCDC'].mean(),4)
+PCYR=round(P_coefs['PCYR'].mean(),4)
+PCMN=round(P_coefs['PCMN'].mean(),4)
+PCDY=round(P_coefs['PCDY'].mean(),4)
+PHE=round(P_coefs['PHE'].mean(),4)
+PINC=round(P_coefs['PINC'].mean(),4)
+#print(PCDC,PCYR,PCMN,PCDY,PINC)
+
+# Calculate the Nitrogen and Phosphorus fluxes (mg/L).
+DISC_data['datetime']=pd.to_datetime(DISC_data['datetime'])
+DISC_data['Year']=DISC_data['datetime'].dt.year
+DISC_data['Month']=DISC_data['datetime'].dt.month
+DISC_data['Day']=DISC_data['datetime'].dt.day
+
+NP_arr=[]    
+for i in range (len(DISC_data)):
+    temp_npr=[]
+    
+    if DISC_data['Discharge'].at[i]>dme:
+        DICS=random.randrange(0.005*dme,0.015*dme)
+    else:
+        DICS=DISC_data['Discharge'].at[i]
+        
+    t_Dc=math.log(DICS)
+    t_Yr=DISC_data['Year'].at[i]
+    t_Mn=math.sin(DISC_data['Month'].at[i])
+    t_Dy=math.cos(DISC_data['Day'].at[i])
+    t_TSLH=DISC_data['TSLH'].at[i]
+    t_HEN=math.exp(-math.pow(SN*(m_TSLH-LN),2)/2)/math.sqrt(PN*math.pi)
+    t_HEP=math.exp(-math.pow(SP*(m_TSLH-LP),2)/2)/math.sqrt(PP*math.pi)
+    
+    N_con=math.exp(NCDC*t_Dc+NCYR*t_Yr+NCMN*t_Mn+NCDY*t_Dy+NHE*t_HEN+NINC)
+    P_con=math.exp(PCDC*t_Dc+PCYR*t_Yr+PCMN*t_Mn+PCDY*t_Dy+PHE*t_HEP+PINC)
+    
+    # Total N P kg/day
+    TN=N_con*(DISC_data['Discharge'].at[i])*28.3168*24*3600/1000000
+    TP=P_con*(DISC_data['Discharge'].at[i])*28.3168*24*3600/1000000
+    
+    temp_npr.append(DISC_data['datetime'].at[i])
+    temp_npr.append(DISC_data['Year'].at[i])
+    temp_npr.append(DISC_data['Month'].at[i])
+    temp_npr.append(DISC_data['Day'].at[i])
+    temp_npr.append(DISC_data['Discharge'].at[i])
+    temp_npr.append(DISC_data['TSLH'].at[i])
+    temp_npr.append(N_con)
+    temp_npr.append(P_con)
+    temp_npr.append(TN)
+    temp_npr.append(TP)
+    
+    NP_arr.append(temp_npr)
+
+#Eliminate high Discharge effect
+    
+results=DataFrame(NP_arr,columns=['Date','Year','Month','Day',
+                                  'Discharge','TSLH','N','P','TN','TP']) 
+file_name='NP_'+watershed_name+'.csv'
+dir_result=str(parent_path)+chr(92)+file_result+chr(92)
+os.chdir(dir_result)
+results.to_csv(file_name)
